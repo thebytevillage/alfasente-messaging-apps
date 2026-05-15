@@ -1,0 +1,132 @@
+# Alfasente Messaging Platform — full stack orchestration
+#
+# All images are pulled from GHCR. No local builds.
+#
+# Usage:
+#   cp .env.example .env        # fill in required secrets
+#   docker compose up -d
+#
+# Services & ports:
+#   platform-api      → http://localhost:3000
+#   admin-portal      → http://localhost:5174
+#   customer-portal   → http://localhost:5175
+#   adminer (DB UI)   → http://localhost:8080
+
+services:
+
+  # ── Infrastructure ─────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: alfasente_postgres
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      POSTGRES_USER:     ${POSTGRES_USER:-platform}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-platform}
+      POSTGRES_DB:       ${POSTGRES_DB:-platform_db}
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-platform} -d ${POSTGRES_DB:-platform_db}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: alfasente_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory-policy noeviction
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  adminer:
+    image: adminer:latest
+    container_name: alfasente_adminer
+    restart: unless-stopped
+    ports:
+      - '8080:8080'
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ── API: run migrations then start ─────────────────────────────────────────────
+  migrate:
+    image: ghcr.io/thebytevillage/messaging-platform-api:main
+    container_name: alfasente_migrate
+    command: sh -c "node_modules/.bin/prisma migrate deploy"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-platform}:${POSTGRES_PASSWORD:-platform}@postgres:5432/${POSTGRES_DB:-platform_db}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+
+  api:
+    image: ghcr.io/thebytevillage/messaging-platform-api:main
+    container_name: alfasente_api
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      NODE_ENV:     production
+      DATABASE_URL: postgresql://${POSTGRES_USER:-platform}:${POSTGRES_PASSWORD:-platform}@postgres:5432/${POSTGRES_DB:-platform_db}
+      REDIS_URL:    redis://redis:6379
+      API_PORT:     '3000'
+    ports:
+      - '3000:3000'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://localhost:3000/health || exit 1']
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+  # ── Web apps ────────────────────────────────────────────────────────────────────
+  admin-portal:
+    image: ghcr.io/thebytevillage/alfasente-messaging-admin:main
+    container_name: alfasente_admin
+    restart: unless-stopped
+    ports:
+      - '5174:80'
+    depends_on:
+      api:
+        condition: service_healthy
+
+  customer-portal:
+    image: ghcr.io/thebytevillage/alfasente-messaging-portal:main
+    container_name: alfasente_portal
+    restart: unless-stopped
+    ports:
+      - '5175:80'
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:
