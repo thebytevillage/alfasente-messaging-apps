@@ -53,7 +53,7 @@ services:
   migrate:
     image: ghcr.io/thebytevillage/messaging-platform-api:main
     container_name: alfasente_migrate
-    command: sh -c "node_modules/.bin/prisma migrate deploy"
+    command: sh -c "npx --yes prisma@5 migrate deploy"
     env_file:
       - path: .env
         required: false
